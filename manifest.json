@@ -1,0 +1,15 @@
+{
+  "domain": "solark_cloud",
+  "name": "Sol-Ark (Cloud)",
+  "version": "0.1.0",
+  "documentation": "https://www.mysolark.com/",
+  "issue_tracker": "https://github.com/",
+  "requirements": [
+    "solark-cloud==0.0.3"
+  ],
+  "codeowners": [
+    "@your-github-handle"
+  ],
+  "iot_class": "cloud_polling",
+  "config_flow": true
+}
