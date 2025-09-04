@@ -3,7 +3,6 @@ from homeassistant.const import Platform
 DOMAIN = "solark_cloud"
 PLATFORMS = [Platform.SENSOR]
 
-# Default (worked for you in 0.2.0)
 DEFAULT_BASE_URL = "https://api.solarkcloud.com"
 
 CONF_USERNAME = "username"
@@ -18,3 +17,5 @@ AUTH_MODE_STRICT = "strict"   # with Origin/Referer
 AUTH_MODE_LEGACY = "legacy"   # minimal headers
 
 DEFAULT_SCAN_INTERVAL = 120
+
+CONF_INVERT_GRID_SIGN = "invert_grid_sign"
