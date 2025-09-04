@@ -143,7 +143,7 @@ class SolarkCloudClient:
             return None
 
     @classmethod
-    def parse_metrics_from_flow(cls, flow: Dict[str, Any]) -> Dict[str, Any]:
+    def parse_metrics_from_flow(cls, flow: Dict[str, Any], invert: bool = False) -> Dict[str, Any]:
         pv = cls._to_float(cls._pick(flow, "pvPower", "pv", "solarPower", "pv_input"))
         load = cls._to_float(cls._pick(flow, "loadOrEpsPower", "loadPower", "load", "housePower"))
         grid_signed = cls._to_float(cls._pick(flow, "gridOrMeterPower", "gridPower", "grid", "gridNet"))
@@ -151,12 +151,21 @@ class SolarkCloudClient:
         soc = cls._to_float(cls._pick(flow, "soc", "batterySoc", "batterySoC", "battSoc"))
         grid_import = grid_export = None
         if grid_signed is not None:
-            if grid_signed >= 0:
-                grid_import = grid_signed
-                grid_export = 0.0
+            if not invert:
+                if grid_signed >= 0:
+                    grid_import = grid_signed
+                    grid_export = 0.0
+                else:
+                    grid_import = 0.0
+                    grid_export = abs(grid_signed)
             else:
-                grid_import = 0.0
-                grid_export = abs(grid_signed)
+                # Inverted: positive = export, negative = import
+                if grid_signed >= 0:
+                    grid_export = grid_signed
+                    grid_import = 0.0
+                else:
+                    grid_export = 0.0
+                    grid_import = abs(grid_signed)
         return {
             "pv_power": pv,
             "load_power": load,
@@ -173,3 +182,20 @@ class SolarkCloudClient:
             return float(val) if val is not None else None
         except Exception:
             return None
+
+
+    @classmethod
+    def parse_grid_energy_today_from_generation_use(cls, genuse: Dict[str, Any]) -> Dict[str, Optional[float]]:
+        def f(v):
+            try:
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+        return {
+            "grid_import_energy_today": f(genuse.get("gridBuy")),
+            "grid_export_energy_today": f(genuse.get("gridSell")),
+            "load_energy_today": f(genuse.get("load")),
+            "battery_charge_energy_today": f(genuse.get("batteryCharge")),
+            "battery_discharge_energy_today": f(genuse.get("batteryDischarge")) if "batteryDischarge" in genuse else None,
+        }
+    
