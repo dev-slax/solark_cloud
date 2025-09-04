@@ -32,7 +32,7 @@ This integration was developed with the assistance of AI (OpenAI’s ChatGPT) al
 ## 📦 Installation
 
 ### Manual
-1. Download the latest release ZIP.  
+1. Download the latest files.  
 2. Extract to:  
    ```
    <config>/custom_components/solark_cloud/
