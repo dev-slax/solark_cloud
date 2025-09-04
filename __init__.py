@@ -1,56 +1,63 @@
-
-from __future__ import annotations
-
-import logging
 from datetime import timedelta
+import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
-from .const import DOMAIN, PLATFORMS, DEFAULT_SCAN_INTERVAL
-from .api import SolArkCloudApi, SolArkAuthError, SolArkApiError
+from .const import (
+    DOMAIN, PLATFORMS, DEFAULT_BASE_URL,
+    CONF_PLANT_ID, CONF_BASE_URL, DEFAULT_SCAN_INTERVAL,
+    CONF_AUTH_MODE, AUTH_MODE_AUTO,
+)
+from .api import SolarkCloudClient
 
 _LOGGER = logging.getLogger(__name__)
 
-type SolarkData = dict
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    api = SolArkCloudApi(
-        hass,
-        username=entry.data["username"],
-        password=entry.data["password"],
-        plant_id=entry.data.get("plant_id"),
-        base_url=entry.data.get("base_url"),
-    )
+    hass.data.setdefault(DOMAIN, {})
 
-    async def _async_update() -> SolarkData:
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
+    plant_id = entry.data.get(CONF_PLANT_ID)
+    base_url = entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL)
+    auth_mode = entry.options.get(CONF_AUTH_MODE, AUTH_MODE_AUTO)
+
+    client = SolarkCloudClient(username, password, plant_id or "", base_url=base_url, auth_mode=auth_mode)
+
+    async def async_update_data() -> dict[str, Any]:
         try:
-            return await api.async_get_flow_and_day_energy()
-        except (SolArkAuthError, SolArkApiError) as e:
-            raise UpdateFailed(str(e)) from e
+            flow = await client.get_flow()
+            flow_metrics = client.parse_metrics_from_flow(flow)
+            genuse = await client.get_generation_use()
+            energy_today = client.parse_energy_today_from_generation_use(genuse)
+            metrics = flow_metrics | {"energy_today": energy_today}
+            return {"metrics": metrics, "last_error": client.last_error}
+        except Exception as err:
+            _LOGGER.error("Update failed: %s", err)
+            return {"metrics": {}, "last_error": str(err)}
 
-    coordinator = DataUpdateCoordinator[SolarkData](
-        hass,
-        _LOGGER,
-        name="solark_cloud",
-        update_method=_async_update,
-        update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+    update_seconds = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    coordinator = DataUpdateCoordinator(
+        hass, _LOGGER,
+        name=f"{DOMAIN}_coordinator",
+        update_method=async_update_data,
+        update_interval=timedelta(seconds=update_seconds),
     )
-    # Do first refresh to populate sensors
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except Exception as err:
+        _LOGGER.warning("First refresh failed: %s", err)
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        "api": api,
-        "coordinator": coordinator,
-    }
-
+    hass.data[DOMAIN][entry.entry_id] = {"client": client, "coordinator": coordinator}
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+    data = hass.data[DOMAIN].pop(entry.entry_id, None)
+    if data and (client := data.get("client")):
+        await client.close()
     return unload_ok
