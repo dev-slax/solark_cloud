@@ -32,3 +32,40 @@ Custom integration for [Home Assistant](https://www.home-assistant.io/) that con
 ### Manual
 1. Download the latest release ZIP.  
 2. Extract to:  
+   ```
+   <config>/custom_components/solark_cloud/
+   ```
+   Verify structure:
+   ```
+   custom_components/solark_cloud/__init__.py
+   custom_components/solark_cloud/api.py
+   custom_components/solark_cloud/config_flow.py
+   custom_components/solark_cloud/const.py
+   custom_components/solark_cloud/manifest.json
+   custom_components/solark_cloud/sensor.py
+   ```
+3. Restart Home Assistant.
+
+---
+
+## ⚙️ Configuration
+1. In Home Assistant, go to **Settings → Devices & Services → Add Integration**.  
+2. Search for **Sol-Ark (SolarkCloud)**.  
+3. Enter:
+   - Username (email)  
+   - Password  
+   - Plant ID  
+   - Base URL (`https://api.solarkcloud.com` or `https://www.mysolark.com`)  
+   - Auth mode (Auto, Strict, Legacy)  
+   - Scan interval (default: 120s)  
+4. Save → Restart HA if needed.
+
+---
+
+## 📝 Changelog
+See [CHANGELOG.md](./CHANGELOG.md) for per-file details.
+
+---
+
+## 📜 License
+MIT License.
