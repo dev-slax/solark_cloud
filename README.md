@@ -1,37 +1,34 @@
+# Sol-Ark Cloud (MySolArk) – Home Assistant Integration
 
-# Sol-Ark (Cloud) — Home Assistant Custom Integration
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Custom%20Component-blue)  
+![Version](https://img.shields.io/badge/version-0.2.5-success)  
+![License](https://img.shields.io/badge/license-MIT-green)
 
-This custom integration logs into **MySolArk** and exposes sensors for your **PV production**:
-- **PV Power (W)**
-- **PV Energy Today (kWh)**
+Custom integration for [Home Assistant](https://www.home-assistant.io/) that connects to the **Sol-Ark Cloud / MySolArk portal** to expose live inverter and solar production data as sensors.
 
-> Notes
-> - MySolArk (Sol-Ark Cloud) updates roughly every **5 minutes**.
-> - As of June 2024, Sol-Ark moved their backend to **api.solarkcloud.com** (from PV Pro/PowerView), but the API is substantially similar.
-> - This integration depends on the PyPI package **`solark-cloud`** which wraps the undocumented cloud API.
+---
 
-## Install
+## ✨ Features
+-  **Authentication** with MySolArk credentials  
+-  **Flexible auth modes**:
+  - Auto (tries strict + legacy)  
+  - Strict (with Origin/Referer headers)  
+  - Legacy (minimal headers)  
+-  **Cross-host fallback**: `api.solarkcloud.com` and `www.mysolark.com`  
+-  **Sensors:**
+  - PV Power (W)  
+  - Load Power (W)  
+  - Grid Import Power (W)  
+  - Grid Export Power (W)  
+  - Battery Power (W) *(+ discharge / − charge)*  
+  - Battery SoC (%)  
+  - Energy Today (kWh)  
+  - Last Error (diagnostics)
 
-1. Download the ZIP attached to this message and extract the folder to:
-   ```
-   <home-assistant-config>/custom_components/solark_cloud
-   ```
-2. Restart Home Assistant.
-3. Go to **Settings → Devices & Services → Add Integration**, search for **Sol-Ark (Cloud)**.
-4. Enter your **MySolArk** username and password. Optionally add a **Plant ID** (leave empty to use the first plant on your account).
+---
 
-### Add to Energy Dashboard (optional)
-- You can use **PV Energy Today** as your solar production source (kWh) in the Energy dashboard.
-- If units or sign need tweaking, create a template sensor accordingly.
+## 📦 Installation
 
-## Troubleshooting
-- If you previously used `api.solark.com` and saw DNS errors, update to the new domain: **api.solarkcloud.com**.
-- Check logs for `solark_cloud` if values are missing; the integration searches common fields in the API response for PV power/energy.
-- If you have multiple plants, set **Plant ID** in the integration **Options**.
-
-## Credits
-- [`solark-cloud` PyPI package](https://pypi.org/project/solark-cloud/) by Mark Smith (MIT).
-- Community research on Sol-Ark's cloud API (e.g., Judas Gutenberg's SolArkMonitor).
-
-## Disclaimer
-This uses an **undocumented** cloud API, which may change without notice.
+### Manual
+1. Download the latest release ZIP.  
+2. Extract to:  
