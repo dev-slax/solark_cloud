@@ -62,10 +62,5 @@ Custom integration for [Home Assistant](https://www.home-assistant.io/) that con
 
 ---
 
-## 📝 Changelog
-See [CHANGELOG.md](./CHANGELOG.md) for per-file details.
-
----
-
 ## 📜 License
 MIT License.
