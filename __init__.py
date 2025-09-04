@@ -10,7 +10,7 @@ from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 from .const import (
     DOMAIN, PLATFORMS, DEFAULT_BASE_URL,
     CONF_PLANT_ID, CONF_BASE_URL, DEFAULT_SCAN_INTERVAL,
-    CONF_AUTH_MODE, AUTH_MODE_AUTO,
+    CONF_AUTH_MODE, AUTH_MODE_AUTO, CONF_INVERT_GRID_SIGN,
 )
 from .api import SolarkCloudClient
 
@@ -24,6 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     plant_id = entry.data.get(CONF_PLANT_ID)
     base_url = entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL)
     auth_mode = entry.options.get(CONF_AUTH_MODE, AUTH_MODE_AUTO)
+    invert_grid = entry.options.get(CONF_INVERT_GRID_SIGN, False)
 
     client = SolarkCloudClient(username, password, plant_id or "", base_url=base_url, auth_mode=auth_mode)
 
@@ -33,7 +34,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             flow_metrics = client.parse_metrics_from_flow(flow)
             genuse = await client.get_generation_use()
             energy_today = client.parse_energy_today_from_generation_use(genuse)
-            metrics = flow_metrics | {"energy_today": energy_today}
+            grid_energy = client.parse_grid_energy_today_from_generation_use(genuse)
+            metrics = (flow_metrics | {"energy_today": energy_today} | grid_energy)
             return {"metrics": metrics, "last_error": client.last_error}
         except Exception as err:
             _LOGGER.error("Update failed: %s", err)
