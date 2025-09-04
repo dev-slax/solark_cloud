@@ -62,5 +62,11 @@ Custom integration for [Home Assistant](https://www.home-assistant.io/) that con
 
 ---
 
-## 📜 License
+## 📜 License and Credits
+This integration was developed independently, with reference to public Sol-Ark community projects:
+- [Rick-EV/SolarkCloud](https://github.com/Rick-EV/SolarkCloud)  
+- [judasgutenberg/SolArkMonitor](https://github.com/judasgutenberg/SolArkMonitor)  
+- [pypi.org/project/solark-cloud](https://pypi.org/project/solark-cloud/)  
+
+Thanks to their work documenting endpoints and field names.
 MIT License.
