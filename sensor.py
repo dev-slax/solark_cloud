@@ -1,132 +1,114 @@
 
 from __future__ import annotations
-import logging
-from collections.abc import Callable
-from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorDeviceClass,
+    SensorEntityDescription,
+    SensorStateClass,
+)
+from homeassistant.const import UnitOfPower, UnitOfEnergy, PERCENTAGE
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
-_LOGGER = logging.getLogger(__name__)
 
-PARSE_CANDIDATES_POWER_W = [
-    ("pv", "power"),
-    ("pv", "w"),
-    ("pvPower",),
-    ("solar", "power"),
-    ("solarPower",),
-]
-PARSE_CANDIDATES_ENERGY_KWH = [
-    ("pv", "eDay"),
-    ("pv", "energyDay"),
-    ("energy", "day"),
-    ("eDay",),
-    ("day_energy",),
+# Use HA's built-in SensorEntityDescription so properties like
+# suggested_unit_of_measurement and entity_registry_enabled_default exist.
+SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="pv_power",
+        name="PV Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:solar-power",
+    ),
+    SensorEntityDescription(
+        key="load_power",
+        name="Load Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:home-lightning-bolt",
+    ),
+    SensorEntityDescription(
+        key="grid_import_power",
+        name="Grid Import Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:transmission-tower-import",
+    ),
+    SensorEntityDescription(
+        key="grid_export_power",
+        name="Grid Export Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:transmission-tower-export",
+    ),
+    SensorEntityDescription(
+        key="battery_power",
+        name="Battery Power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:battery-charging-50",
+    ),
+    SensorEntityDescription(
+        key="battery_soc",
+        name="Battery SoC",
+        device_class=SensorDeviceClass.BATTERY,
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:battery-heart-variant",
+    ),
+    SensorEntityDescription(
+        key="energy_today",
+        name="Energy Today",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:counter",
+    ),
+    SensorEntityDescription(
+        key="last_error",
+        name="Last Error",
+        icon="mdi:alert-circle",
+        entity_registry_enabled_default=True,
+    ),
 ]
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
+async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
-
-    entities = [
-        SolArkPvPowerSensor(coordinator, entry),
-        SolArkPvEnergyTodaySensor(coordinator, entry),
-    ]
+    device_info = DeviceInfo(
+        identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
+        name="Sol-Ark Plant",
+        manufacturer="Sol-Ark",
+        model="MySolArk Cloud",
+        configuration_url="https://www.mysolark.com/",
+    )
+    entities = [SolarkSensorEntity(coordinator, d, device_info, entry) for d in SENSORS]
     async_add_entities(entities)
 
-
-class BaseSolArkSensor(CoordinatorEntity, SensorEntity):
+class SolarkSensorEntity(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, entry: ConfigEntry):
+    def __init__(self, coordinator, description: SensorEntityDescription, device_info: DeviceInfo, entry):
         super().__init__(coordinator)
-        self._entry = entry
-
-    @property
-    def available(self) -> bool:
-        v = self._value() is not None
-        return v and super().available
-
-    def _extract_nested(self, data: Any, *keys: str) -> Any:
-        cur = data
-        for k in keys:
-            if cur is None:
-                return None
-            if isinstance(cur, dict):
-                # try several casings
-                candidates = [k, k.lower(), k.upper(), k.capitalize()]
-                found = None
-                for c in candidates:
-                    if c in cur:
-                        found = cur[c]
-                        break
-                cur = found
-            else:
-                # object attribute
-                cur = getattr(cur, k, None) or getattr(cur, k.lower(), None) or getattr(cur, k.upper(), None)
-        return cur
-
-    def _search_candidates(self, candidates: list[tuple[str, ...]]) -> Any:
-        flow = self.coordinator.data.get("flow", {})
-        # sometimes flow might be nested under 'data'
-        if isinstance(flow, dict) and "data" in flow:
-            flow = flow["data"]
-        for keys in candidates:
-            val = self._extract_nested(flow, *keys)
-            if isinstance(val, (int, float)):
-                return val
-        # fallback: scan for key names containing hints
-        return None
-
-
-class SolArkPvPowerSensor(BaseSolArkSensor):
-    _attr_native_unit_of_measurement = "W"
-    _attr_device_class = "power"
-    _attr_name = "PV Power"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_pv_power"
-
-    def _value(self):
-        return self._search_candidates(PARSE_CANDIDATES_POWER_W)
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_name = description.name
+        self._attr_device_info = device_info
+        self._attr_icon = description.icon
+        self._attr_device_class = description.device_class
+        self._attr_native_unit_of_measurement = description.native_unit_of_measurement
 
     @property
     def native_value(self):
-        return self._value()
-
-
-class SolArkPvEnergyTodaySensor(BaseSolArkSensor):
-    _attr_native_unit_of_measurement = "kWh"
-    _attr_device_class = "energy"
-    _attr_state_class = "total_increasing"
-    _attr_name = "PV Energy Today"
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self._entry.entry_id}_pv_energy_today"
-
-    def _value(self):
-        # Prefer day energy from 'day' payload first
-        day = self.coordinator.data.get("day") or {}
-        if isinstance(day, dict):
-            for k in ("eDay", "day", "energy", "pvEnergy", "today"):
-                v = day.get(k)
-                if isinstance(v, (int, float)):
-                    return v
-                if isinstance(v, dict):
-                    for kk in ("value", "kWh"):
-                        vv = v.get(kk)
-                        if isinstance(vv, (int, float)):
-                            return vv
-        # fall back to flow candidates
-        val = self._search_candidates(PARSE_CANDIDATES_ENERGY_KWH)
-        return val
-
-    @property
-    def native_value(self):
-        return self._value()
+        if self.entity_description.key == "last_error":
+            return (self.coordinator.data or {}).get("last_error")
+        metrics = (self.coordinator.data or {}).get("metrics", {})
+        return metrics.get(self.entity_description.key)
