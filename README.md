@@ -6,6 +6,7 @@
 
 Custom integration for [Home Assistant](https://www.home-assistant.io/) that connects to the **Sol-Ark Cloud / MySolArk portal** to expose live inverter and solar production data as sensors.
 
+This integration was developed with the assistance of AI (OpenAI’s ChatGPT) alongside manual coding, testing, and verification.
 ---
 
 ## ✨ Features
