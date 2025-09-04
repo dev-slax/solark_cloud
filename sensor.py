@@ -16,6 +16,32 @@ from .const import DOMAIN
 # Use HA's built-in SensorEntityDescription so properties like
 # suggested_unit_of_measurement and entity_registry_enabled_default exist.
 SENSORS: list[SensorEntityDescription] = [
+    
+    SensorEntityDescription(
+        key="pv_energy_today",
+        name="PV Energy Today",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:solar-power",
+    ),
+    SensorEntityDescription(
+        key="grid_import_energy_today",
+        name="Grid Import Energy Today",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:transmission-tower-import",
+    ),
+    SensorEntityDescription(
+        key="grid_export_energy_today",
+        name="Grid Export Energy Today",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:transmission-tower-export",
+    ),
+    
     SensorEntityDescription(
         key="pv_power",
         name="PV Power",
@@ -108,7 +134,11 @@ class SolarkSensorEntity(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        if self.entity_description.key == "last_error":
+        key = self.entity_description.key
+        if key == "last_error":
             return (self.coordinator.data or {}).get("last_error")
         metrics = (self.coordinator.data or {}).get("metrics", {})
-        return metrics.get(self.entity_description.key)
+        if key == "pv_energy_today":
+            # Backed by metrics['energy_today'] for compatibility
+            return metrics.get("energy_today")
+        return metrics.get(key)
