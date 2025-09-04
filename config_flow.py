@@ -5,7 +5,7 @@ from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
-from .const import DOMAIN, CONF_PLANT_ID, CONF_BASE_URL, DEFAULT_BASE_URL, DEFAULT_SCAN_INTERVAL, CONF_AUTH_MODE, AUTH_MODE_AUTO, AUTH_MODE_STRICT, AUTH_MODE_LEGACY
+from .const import DOMAIN, CONF_PLANT_ID, CONF_BASE_URL, DEFAULT_BASE_URL, DEFAULT_SCAN_INTERVAL, CONF_AUTH_MODE, AUTH_MODE_AUTO, AUTH_MODE_STRICT, AUTH_MODE_LEGACY, CONF_INVERT_GRID_SIGN
 from .api import SolarkCloudClient
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
@@ -16,6 +16,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
         vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
         vol.Optional(CONF_AUTH_MODE, default=AUTH_MODE_AUTO): vol.In([AUTH_MODE_AUTO, AUTH_MODE_STRICT, AUTH_MODE_LEGACY]),
+        vol.Optional(CONF_INVERT_GRID_SIGN, default=False): bool,
     }
 )
 
@@ -46,6 +47,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 options = {
                     CONF_SCAN_INTERVAL: user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
                     CONF_AUTH_MODE: user_input.get(CONF_AUTH_MODE, AUTH_MODE_AUTO),
+                    CONF_INVERT_GRID_SIGN: user_input.get(CONF_INVERT_GRID_SIGN, False),
                 }
                 return self.async_create_entry(title=title, data=data, options=options)
             except Exception:
