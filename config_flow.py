@@ -1,52 +1,57 @@
-
-from __future__ import annotations
-
 import voluptuous as vol
+from typing import Any
+
 from homeassistant import config_entries
-from homeassistant.core import callback
+from homeassistant.data_entry_flow import FlowResult
+from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 
-from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, CONF_PLANT_ID, CONF_BASE_URL, DEFAULT_BASE_URL
+from .const import DOMAIN, CONF_PLANT_ID, CONF_BASE_URL, DEFAULT_BASE_URL, DEFAULT_SCAN_INTERVAL, CONF_AUTH_MODE, AUTH_MODE_AUTO, AUTH_MODE_STRICT, AUTH_MODE_LEGACY
+from .api import SolarkCloudClient
 
-DATA_SCHEMA = vol.Schema({
-    vol.Required(CONF_USERNAME): str,
-    vol.Required(CONF_PASSWORD): str,
-    vol.Optional(CONF_PLANT_ID): str,
-    vol.Optional(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
-})
+STEP_USER_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_USERNAME): str,
+        vol.Required(CONF_PASSWORD): str,
+        vol.Required(CONF_PLANT_ID): str,
+        vol.Optional(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
+        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
+        vol.Optional(CONF_AUTH_MODE, default=AUTH_MODE_AUTO): vol.In([AUTH_MODE_AUTO, AUTH_MODE_STRICT, AUTH_MODE_LEGACY]),
+    }
+)
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
-    async def async_step_user(self, user_input=None):
-        errors = {}
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            # In a first version we don't validate remotely to avoid blocking UI
-            return self.async_create_entry(title="Sol-Ark (Cloud)", data=user_input)
-        return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA, errors=errors)
+            client = SolarkCloudClient(
+                user_input[CONF_USERNAME],
+                user_input[CONF_PASSWORD],
+                user_input[CONF_PLANT_ID],
+                base_url=user_input.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+                auth_mode=user_input.get(CONF_AUTH_MODE, AUTH_MODE_AUTO),
+            )
+            try:
+                # Use /plants like 0.2.0 which worked for you
+                await client.get_plants()
+                await client.close()
+                title = f"Sol-Ark ({user_input[CONF_PLANT_ID]})"
+                data = {
+                    "username": user_input[CONF_USERNAME],
+                    "password": user_input[CONF_PASSWORD],
+                    "plant_id": user_input[CONF_PLANT_ID],
+                    "base_url": user_input.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+                }
+                options = {
+                    CONF_SCAN_INTERVAL: user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                    CONF_AUTH_MODE: user_input.get(CONF_AUTH_MODE, AUTH_MODE_AUTO),
+                }
+                return self.async_create_entry(title=title, data=data, options=options)
+            except Exception:
+                errors["base"] = "cannot_connect"
 
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry):
-        return OptionsFlow(config_entry)
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors)
 
-
-class OptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
-
-    async def async_step_init(self, user_input=None):
-        if user_input is not None:
-            data = self.config_entry.data.copy()
-            data.update(user_input)
-            self.hass.config_entries.async_update_entry(self.config_entry, data=data)
-            return self.async_create_entry(title="", data={})
-
-        defaults = {
-            CONF_PLANT_ID: self.config_entry.data.get(CONF_PLANT_ID, ""),
-            CONF_BASE_URL: self.config_entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL),
-        }
-        schema = vol.Schema({
-            vol.Optional(CONF_PLANT_ID, default=defaults[CONF_PLANT_ID]): str,
-            vol.Optional(CONF_BASE_URL, default=defaults[CONF_BASE_URL]): str,
-        })
-        return self.async_show_form(step_id="init", data_schema=schema)
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
+        return await self.async_step_user()
