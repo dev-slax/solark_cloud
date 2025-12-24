@@ -8,6 +8,8 @@ Custom integration for [Home Assistant](https://www.home-assistant.io/) that con
 
 This integration was developed with the assistance of AI (OpenAI’s ChatGPT) alongside manual coding, testing, and verification.
 
+not in active development, life has been a bit too busy. lots of development happening over at https://github.com/HammondAutomationHub/HomeAssistant_SolArk 
+
 ---
 
 ## ✨ Features
