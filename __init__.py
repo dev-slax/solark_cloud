@@ -26,7 +26,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     auth_mode = entry.options.get(CONF_AUTH_MODE, AUTH_MODE_AUTO)
     invert_grid = entry.options.get(CONF_INVERT_GRID_SIGN, False)
 
-    client = SolarkCloudClient(username, password, plant_id or "", base_url=base_url, auth_mode=auth_mode)
+    update_seconds = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    client = SolarkCloudClient(
+        username,
+        password,
+        plant_id or "",
+        base_url=base_url,
+        auth_mode=auth_mode,
+        update_seconds=update_seconds,
+    )
 
     async def async_update_data() -> dict[str, Any]:
         try:
@@ -34,14 +42,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             flow_metrics = client.parse_metrics_from_flow(flow)
             genuse = await client.get_generation_use()
             energy_today = client.parse_energy_today_from_generation_use(genuse)
-            grid_energy = client.parse_grid_energy_today_from_generation_use(genuse)
-            metrics = (flow_metrics | {"energy_today": energy_today} | grid_energy)
+            if coordinator.data is not None:
+                grid_energy = client.parse_daily_energy_from_flow(
+                    flow, coordinator.data["metrics"]
+                )
+            else:
+                grid_energy = {
+                    # initialize if nonexistent
+                    "grid_import_energy_today": 0,
+                    "grid_export_energy_today": 0,
+                    "load_energy_today": 0,
+                }
+            metrics = flow_metrics | {"energy_today": energy_today} | grid_energy
             return {"metrics": metrics, "last_error": client.last_error}
         except Exception as err:
             _LOGGER.error("Update failed: %s", err)
             return {"metrics": {}, "last_error": str(err)}
 
-    update_seconds = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     coordinator = DataUpdateCoordinator(
         hass, _LOGGER,
         name=f"{DOMAIN}_coordinator",
