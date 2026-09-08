@@ -1,36 +1,56 @@
-from datetime import datetime
-import time
-from typing import Any, Dict, Optional, List, Tuple
-import aiohttp
-import async_timeout
+from __future__ import annotations
+
+import asyncio
 import logging
-from urllib.parse import urlparse
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
+_REQUEST_TIMEOUT_SECONDS = 20
+_TOKEN_EXPIRY_MARGIN_SECONDS = 600
+
+
+class SolarkError(Exception):
+    """Base exception for expected Sol-Ark API failures."""
+
+
+class SolarkAuthError(SolarkError):
+    """Authentication was rejected by MySolArk."""
+
+
+class SolarkApiError(SolarkError):
+    """MySolArk could not be reached or returned an invalid response."""
+
 
 class SolarkCloudClient:
-    def __init__(self, username: str, password: str, plant_id: str, base_url: str = "https://api.solarkcloud.com", session: Optional[aiohttp.ClientSession] = None, auth_mode: str = "auto", update_seconds: int = 0) -> None:
+    """Minimal asynchronous client for the MySolArk cloud API."""
+
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        plant_id: str,
+        session: aiohttp.ClientSession,
+        *,
+        api_url: str = "https://p2.api.solarkcloud.com",
+        origin_url: str = "https://www.solarkcloud.com",
+        fallback_urls: tuple[str, ...] = (),
+        auth_mode: str = "auto",
+    ) -> None:
         self._username = username
         self._password = password
         self._plant_id = str(plant_id or "")
-        self._base_url = base_url.rstrip("/")
         self._session = session
-        self._token: Optional[str] = None
-        self._token_expiry: Optional[float] = None
+        self._api_url = api_url.rstrip("/")
+        self._origin_url = origin_url.rstrip("/")
+        self._fallback_urls = tuple(url.rstrip("/") for url in fallback_urls)
         self._auth_mode = auth_mode
-        self.last_error: Optional[str] = None
-
-        self._update_seconds = update_seconds
-
-    @property
-    def session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+        self._token: str | None = None
+        self._token_expiry: float | None = None
+        self.last_error: str | None = None
 
     async def _ensure_token(self) -> None:
         now = time.time()
@@ -38,217 +58,201 @@ class SolarkCloudClient:
             return
         await self._login()
 
-    def _login_headers(self, base: str, mode: str) -> Dict[str, str]:
-        h = {
+    @staticmethod
+    def _login_headers(origin: str, mode: str) -> dict[str, str]:
+        headers = {
             "Content-Type": "application/json;charset=UTF-8",
             "Accept": "application/json",
         }
         if mode == "strict":
-            h["Origin"] = base
-            h["Referer"] = f"{base}/"
-        return h
+            headers["Origin"] = origin
+            headers["Referer"] = f"{origin}/"
+        return headers
 
     async def _try_login_once(
         self, base: str, headers_mode: str
-    ) -> Tuple[bool, Optional[str], Optional[int]]:
-        url = f"{base}/oauth/token"
+    ) -> tuple[bool, bool]:
         payload = {
             "client_id": "csp-web",
             "grant_type": "password",
             "username": self._username,
             "password": self._password,
         }
-        headers = self._login_headers(base, headers_mode)
-        async with async_timeout.timeout(20):
-            async with self.session.post(url, json=payload, headers=headers) as resp:
-                txt = await resp.text()
-                if resp.status != 200:
-                    return False, f"{resp.status} {txt[:180]}", resp.status
-                data = await resp.json(content_type=None)
-        token = None
+
+        try:
+            async with asyncio.timeout(_REQUEST_TIMEOUT_SECONDS):
+                async with self._session.post(
+                    f"{base}/oauth/token",
+                    json=payload,
+                    headers=self._login_headers(self._origin_url, headers_mode),
+                ) as response:
+                    if response.status != 200:
+                        auth_rejected = response.status in (400, 401, 403)
+                        self.last_error = (
+                            f"login failed at {base} ({headers_mode}): "
+                            f"HTTP {response.status}"
+                        )
+                        return False, auth_rejected
+                    try:
+                        data = await response.json(content_type=None)
+                    except (ValueError, TypeError):
+                        self.last_error = f"login returned invalid JSON at {base}"
+                        return False, False
+        except TimeoutError:
+            self.last_error = f"login timed out at {base}"
+            return False, False
+        except aiohttp.ClientError:
+            self.last_error = f"login request failed at {base}"
+            return False, False
+
+        token: str | None = None
         expires_in = 3600
         if isinstance(data, dict):
+            nested = data.get("data")
+            nested = nested if isinstance(nested, dict) else {}
             token = (
-                (data.get("data") or {}).get("access_token")
+                nested.get("access_token")
                 or data.get("access_token")
                 or data.get("token")
             )
-            expires_in = int(
-                (data.get("data") or {}).get(
-                    "expires_in", data.get("expires_in", expires_in)
-                )
-            )
+            raw_expiry = nested.get("expires_in", data.get("expires_in", expires_in))
+            try:
+                expires_in = int(raw_expiry)
+            except (TypeError, ValueError):
+                expires_in = 3600
+
         if not token:
-            return False, "no access_token in response", None
-        self._token = token
-        self._token_expiry = time.time() + max(60, expires_in - 600)
-        return True, None, None
+            self.last_error = f"login returned no token at {base}"
+            return False, False
+
+        self._token = str(token)
+        self._token_expiry = time.time() + max(
+            60, expires_in - _TOKEN_EXPIRY_MARGIN_SECONDS
+        )
+        self.last_error = None
+        return True, False
 
     async def _login(self) -> None:
         self.last_error = None
-        bases = [self._base_url]
-        # Offer cross-host fallback if the user entered one of the two known hosts
-        host = urlparse(self._base_url).netloc
-        alt = (
-            "https://www.mysolark.com"
-            if "api.solarkcloud.com" in host
-            else "https://api.solarkcloud.com"
-        )
-        if alt not in bases:
-            bases.append(alt)
 
-        modes = []
+        bases: list[str] = []
+        for base in (self._api_url, *self._fallback_urls):
+            if base and base not in bases:
+                bases.append(base)
+
         if self._auth_mode == "auto":
-            modes = ["strict", "legacy"]
+            modes = ("strict", "legacy")
         elif self._auth_mode == "strict":
-            modes = ["strict"]
+            modes = ("strict",)
         else:
-            modes = ["legacy"]
+            modes = ("legacy",)
 
-        # Try combinations
-        for b in bases:
-            for m in modes:
-                ok, err, code = await self._try_login_once(b, m)
+        saw_auth_rejection = False
+        # Deliberately bounded: at most two known hosts x two auth modes.
+        for base in bases[:2]:
+            for mode in modes:
+                ok, auth_rejected = await self._try_login_once(base, mode)
+                saw_auth_rejection = saw_auth_rejection or auth_rejected
                 if ok:
-                    self._base_url = b  # use the working base
+                    self._api_url = base
                     return
-                else:
-                    self.last_error = f"login failed at {b} ({m}): {err}"
-                    _LOGGER.debug(self.last_error)
-        raise RuntimeError(self.last_error or "Login failed")
+                _LOGGER.debug("%s", self.last_error)
 
-    async def _get(
-        self, path: str, params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        await self._ensure_token()
-        url = f"{self._base_url}{path}"
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Accept": "application/json",
-        }
-        async with async_timeout.timeout(20):
-            async with self.session.get(url, headers=headers, params=params) as resp:
-                txt = await resp.text()
-                if resp.status != 200:
-                    self.last_error = f"GET {path} failed: {resp.status} {txt[:180]}"
-                    raise RuntimeError(self.last_error)
-                return await resp.json(content_type=None)
+        if saw_auth_rejection:
+            raise SolarkAuthError(self.last_error or "authentication rejected")
+        raise SolarkApiError(self.last_error or "login failed")
 
-    async def get_flow(self, date_str: Optional[str] = None) -> Dict[str, Any]:
-        from datetime import datetime, timezone
+    async def _request_json(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        # Exactly one retry is permitted after a 401. No recursion.
+        for attempt in range(2):
+            await self._ensure_token()
+            headers = {
+                "Authorization": f"Bearer {self._token}",
+                "Accept": "application/json",
+            }
 
+            try:
+                async with asyncio.timeout(_REQUEST_TIMEOUT_SECONDS):
+                    async with self._session.get(
+                        f"{self._api_url}{path}", headers=headers, params=params
+                    ) as response:
+                        if response.status == 401:
+                            self._token = None
+                            self._token_expiry = None
+                            if attempt == 0:
+                                continue
+                            raise SolarkAuthError("authentication rejected")
+                        if response.status != 200:
+                            self.last_error = (
+                                f"GET {path} failed: HTTP {response.status}"
+                            )
+                            raise SolarkApiError(self.last_error)
+                        try:
+                            data = await response.json(content_type=None)
+                        except (ValueError, TypeError) as err:
+                            raise SolarkApiError(
+                                f"GET {path} returned invalid JSON"
+                            ) from err
+            except TimeoutError as err:
+                raise SolarkApiError(f"GET {path} timed out") from err
+            except aiohttp.ClientError as err:
+                raise SolarkApiError(f"GET {path} request failed") from err
+
+            if not isinstance(data, dict):
+                raise SolarkApiError(
+                    f"GET {path} returned an unexpected payload"
+                )
+
+            self.last_error = None
+            return data
+
+        raise SolarkAuthError("authentication rejected")
+
+    async def get_flow(self, date_str: str | None = None) -> dict[str, Any]:
         if date_str is None:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         params = {"date": date_str, "id": self._plant_id, "lan": "en"}
-        data = await self._get(
+        data = await self._request_json(
             f"/api/v1/plant/energy/{self._plant_id}/flow", params=params
         )
-        return (data.get("data") if isinstance(data, dict) else data) or {}
+        payload = data.get("data")
+        return payload if isinstance(payload, dict) else {}
 
-    async def get_generation_use(
-        self, date_str: Optional[str] = None
-    ) -> Dict[str, Any]:
-        from datetime import datetime, timezone
-
+    async def get_generation_use(self, date_str: str | None = None) -> dict[str, Any]:
         if date_str is None:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         params = {"date": date_str, "lan": "en"}
-        data = await self._get(
+        data = await self._request_json(
             f"/api/v1/plant/energy/{self._plant_id}/generation/use", params=params
         )
-        return (data.get("data") if isinstance(data, dict) else data) or {}
-
-    async def get_plants(self) -> Dict[str, Any]:
-        return await self._get(
-            "/api/v1/plants", params={"page": 1, "limit": 10, "name": "", "status": ""}
-        )
-
-    def parse_daily_energy_from_flow(
-        self, flow: Dict[str, Any], metrics: Dict[str, Any], invert: bool = False
-    ) -> Dict[str, Any]:
-        if metrics == {}:
-            return {
-                "grid_import_energy_today": 0,
-                "grid_export_energy_today": 0,
-                "load_energy_today": 0,
-            }
-        grid_import = grid_export = grid_import_energy_today = (
-            grid_export_energy_today
-        ) = load_energy_today = None
-        load = self._to_float(
-            self._pick(flow, "loadOrEpsPower", "loadPower", "load", "housePower")
-        )
-        grid_signed = self._to_float(
-            self._pick(flow, "gridOrMeterPower", "gridPower", "grid", "gridNet")
-        )
-        if grid_signed is not None:
-            if not invert:
-                if grid_signed >= 0:
-                    grid_import = grid_signed
-                    grid_export = 0.0
-                else:
-                    grid_import = 0.0
-                    grid_export = abs(grid_signed)
-            else:
-                # Inverted: positive = export, negative = import
-                if grid_signed >= 0:
-                    grid_export = grid_signed
-                    grid_import = 0.0
-                else:
-                    grid_export = 0.0
-                    grid_import = abs(grid_signed)
-        if metrics is not None:
-            # get prior grid_import_energy_today
-            grid_import_energy_today = metrics["grid_import_energy_today"] + (
-                grid_import / 1000
-            ) * (self._update_seconds / 60)
-            grid_export_energy_today = metrics["grid_export_energy_today"] + (
-                grid_export / 1000
-            ) * (self._update_seconds / 60)
-            load_energy_today = metrics["load_energy_today"] + (load / 1000) * (
-                self._update_seconds / 60
-            )
-        hour = int(datetime.today().strftime("%H"))
-        minute = int(datetime.today().strftime("%M"))
-        if hour == 0 and minute <= 2:
-            # reset daily statistics at midnight
-            grid_import_energy_today = (grid_import / 1000) * (
-                self._update_seconds / 60
-            )
-            grid_export_energy_today = (grid_export / 1000) * (
-                self._update_seconds / 60
-            )
-            load_energy_today = (load / 1000) * (self._update_seconds / 60)
-
-        return {
-            "grid_import_energy_today": grid_import_energy_today,
-            "grid_export_energy_today": grid_export_energy_today,
-            "load_energy_today": load_energy_today,
-        }
+        payload = data.get("data")
+        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
-    def _pick(d: Dict[str, Any], *keys, default=None):
-        for k in keys:
-            if k in d and d[k] is not None:
-                return d[k]
-        flow = d.get("flow")
+    def _pick(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
+        for key in keys:
+            if key in data and data[key] is not None:
+                return data[key]
+        flow = data.get("flow")
         if isinstance(flow, dict):
-            for k in keys:
-                if k in flow and flow[k] is not None:
-                    return flow[k]
+            for key in keys:
+                if key in flow and flow[key] is not None:
+                    return flow[key]
         return default
 
     @staticmethod
-    def _to_float(x):
+    def _to_float(value: Any) -> float | None:
         try:
-            return float(x)
-        except Exception:
+            return float(value)
+        except (TypeError, ValueError):
             return None
 
     @classmethod
     def parse_metrics_from_flow(
-        cls, flow: Dict[str, Any], invert: bool = False
-    ) -> Dict[str, Any]:
+        cls, flow: dict[str, Any], invert: bool = False
+    ) -> dict[str, float | None]:
         pv = cls._to_float(cls._pick(flow, "pvPower", "pv", "solarPower", "pv_input"))
         load = cls._to_float(
             cls._pick(flow, "loadOrEpsPower", "loadPower", "load", "housePower")
@@ -256,64 +260,48 @@ class SolarkCloudClient:
         grid_signed = cls._to_float(
             cls._pick(flow, "gridOrMeterPower", "gridPower", "grid", "gridNet")
         )
-        batt = cls._to_float(
+        battery = cls._to_float(
             cls._pick(flow, "battPower", "batteryPower", "battery", "batt")
         )
         soc = cls._to_float(
             cls._pick(flow, "soc", "batterySoc", "batterySoC", "battSoc")
         )
+
+        grid_import: float | None = None
+        grid_export: float | None = None
         if grid_signed is not None:
-            if not invert:
-                if grid_signed >= 0:
-                    grid_import = grid_signed
-                    grid_export = 0.0
-                else:
-                    grid_import = 0.0
-                    grid_export = abs(grid_signed)
+            if invert:
+                grid_export = max(grid_signed, 0.0)
+                grid_import = max(-grid_signed, 0.0)
             else:
-                # Inverted: positive = export, negative = import
-                if grid_signed >= 0:
-                    grid_export = grid_signed
-                    grid_import = 0.0
-                else:
-                    grid_export = 0.0
-                    grid_import = abs(grid_signed)
+                grid_import = max(grid_signed, 0.0)
+                grid_export = max(-grid_signed, 0.0)
 
         return {
             "pv_power": pv,
             "load_power": load,
             "grid_import_power": grid_import,
             "grid_export_power": grid_export,
-            "battery_power": batt,
+            "battery_power": battery,
             "battery_soc": soc,
         }
 
     @classmethod
     def parse_energy_today_from_generation_use(
-        cls, genuse: Dict[str, Any]
-    ) -> Optional[float]:
-        val = genuse.get("pv")
-        try:
-            return float(val) if val is not None else None
-        except Exception:
-            return None
+        cls, genuse: dict[str, Any]
+    ) -> float | None:
+        return cls._to_float(genuse.get("pv"))
 
     @classmethod
     def parse_grid_energy_today_from_generation_use(
-        cls, genuse: Dict[str, Any]
-    ) -> Dict[str, Optional[float]]:
-        def f(v):
-            try:
-                return float(v) if v is not None else None
-            except Exception:
-                return None
-
+        cls, genuse: dict[str, Any]
+    ) -> dict[str, float | None]:
         return {
-            "grid_import_energy_today": f(genuse.get("gridBuy")),
-            "grid_export_energy_today": f(genuse.get("gridSell")),
-            "load_energy_today": f(genuse.get("load")),
-            "battery_charge_energy_today": f(genuse.get("batteryCharge")),
-            "battery_discharge_energy_today": f(genuse.get("batteryDischarge"))
-            if "batteryDischarge" in genuse
-            else None,
+            "grid_import_energy_today": cls._to_float(genuse.get("gridBuy")),
+            "grid_export_energy_today": cls._to_float(genuse.get("gridSell")),
+            "load_energy_today": cls._to_float(genuse.get("load")),
+            "battery_charge_energy_today": cls._to_float(genuse.get("batteryCharge")),
+            "battery_discharge_energy_today": cls._to_float(
+                genuse.get("batteryDischarge")
+            ),
         }

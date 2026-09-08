@@ -1,27 +1,24 @@
-
 from __future__ import annotations
 
 from homeassistant.components.sensor import (
-    SensorEntity,
     SensorDeviceClass,
+    SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfPower, UnitOfEnergy, PERCENTAGE
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
-# Use HA's built-in SensorEntityDescription so properties like
-# suggested_unit_of_measurement and entity_registry_enabled_default exist.
 SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
         key="pv_energy_today",
         name="PV Energy Today",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         icon="mdi:solar-power",
     ),
     SensorEntityDescription(
@@ -29,7 +26,7 @@ SENSORS: list[SensorEntityDescription] = [
         name="Load Energy Today",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         icon="mdi:transmission-tower-import",
     ),
     SensorEntityDescription(
@@ -37,7 +34,7 @@ SENSORS: list[SensorEntityDescription] = [
         name="Grid Import Energy Today",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         icon="mdi:transmission-tower-import",
     ),
     SensorEntityDescription(
@@ -45,7 +42,7 @@ SENSORS: list[SensorEntityDescription] = [
         name="Grid Export Energy Today",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         icon="mdi:transmission-tower-export",
     ),
     SensorEntityDescription(
@@ -96,6 +93,7 @@ SENSORS: list[SensorEntityDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:battery-heart-variant",
     ),
+    # Retained for entity compatibility with 0.2.5.
     SensorEntityDescription(
         key="energy_today",
         name="Energy Today",
@@ -112,9 +110,9 @@ SENSORS: list[SensorEntityDescription] = [
     ),
 ]
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator"]
+
+async def async_setup_entry(hass, entry, async_add_entities) -> None:
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     device_info = DeviceInfo(
         identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
         name="Sol-Ark Plant",
@@ -122,13 +120,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
         model="MySolArk Cloud",
         configuration_url="https://www.mysolark.com/",
     )
-    entities = [SolarkSensorEntity(coordinator, d, device_info, entry) for d in SENSORS]
-    async_add_entities(entities)
+    async_add_entities(
+        SolarkSensorEntity(coordinator, description, device_info, entry)
+        for description in SENSORS
+    )
+
 
 class SolarkSensorEntity(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, description: SensorEntityDescription, device_info: DeviceInfo, entry):
+    def __init__(self, coordinator, description, device_info, entry) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
@@ -143,8 +144,8 @@ class SolarkSensorEntity(CoordinatorEntity, SensorEntity):
         key = self.entity_description.key
         if key == "last_error":
             return (self.coordinator.data or {}).get("last_error")
+
         metrics = (self.coordinator.data or {}).get("metrics", {})
         if key == "pv_energy_today":
-            # Backed by metrics['energy_today'] for compatibility
             return metrics.get("energy_today")
         return metrics.get(key)

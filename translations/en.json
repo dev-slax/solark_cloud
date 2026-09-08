@@ -1,0 +1,36 @@
+{
+  "config": {
+    "flow_title": "Sol-Ark Cloud",
+    "step": {
+      "user": {
+        "title": "Connect to MySolArk",
+        "description": "Sign in with MySolArk and enter the Plant ID to expose read-only energy data in Home Assistant.",
+        "data": {
+          "username": "Email / Username",
+          "password": "Password",
+          "plant_id": "Plant ID",
+          "scan_interval": "Scan interval (seconds)",
+          "auth_mode": "Authentication mode",
+          "invert_grid_sign": "Invert grid import/export sign"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect MySolArk",
+        "description": "Update the credentials for this existing Sol-Ark plant.",
+        "data": {
+          "username": "Email / Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to MySolArk or validate this Plant ID.",
+      "invalid_input": "Username, password, and Plant ID are required.",
+      "invalid_auth": "MySolArk rejected the credentials."
+    },
+    "abort": {
+      "already_configured": "This Plant ID is already configured.",
+      "reauth_successful": "MySolArk credentials were updated successfully."
+    }
+  }
+}
